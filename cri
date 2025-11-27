@@ -1,0 +1,1339 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Package, 
+  ArrowUpCircle, 
+  ArrowDownCircle, 
+  LayoutDashboard, 
+  ScanLine, 
+  History, 
+  Search, 
+  Plus, 
+  Minus, // Import Minus กลับมาแล้วครับ
+  AlertTriangle,
+  Filter,
+  Droplets,
+  Wind,
+  Settings,
+  X,
+  Image as ImageIcon,
+  Pencil,
+  Trash2,
+  RefreshCw,
+  Wifi,
+  WifiOff,
+  CheckCircle2,
+  FileUp,
+  Download,
+  FileSpreadsheet,
+  Menu,
+  Wrench, 
+  Tag, 
+  Layers,
+  User,
+  Truck,
+  ChevronUp,
+  ChevronDown,
+  ChevronRight,
+  Camera,
+  RefreshCcw,
+  Zap,
+  ZapOff,
+  AlertCircle,
+  List,
+  Clock,
+  ClipboardCheck,
+  FileText,
+  FileType
+} from 'lucide-react';
+
+// --- Configuration ---
+const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbzPgIoFAmiWsJ6j3HjzfLViAZ_dgIjYgTIT-d5lLsgAEgDwQbcfYXDkyfjmkoZ97JuDow/exec';
+
+// --- Helper: Format Date Thai (DD/MM/YYYY HH:mm) ---
+const formatThaiDateTime = (date) => {
+  const d = new Date(date);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear() + 543;
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+};
+
+// --- Menu Configuration ---
+const MENU_ITEMS = [
+  { id: 'dashboard', label: 'ภาพรวมระบบ', icon: LayoutDashboard },
+  { id: 'operation', label: 'สแกน (เบิก/รับ)', icon: ScanLine },
+  { id: 'inventory', label: 'จัดการสต็อก', icon: Package },
+  { id: 'lowstock', label: 'สินค้าใกล้หมด', icon: AlertTriangle },
+  { id: 'stockcheck', label: 'นับสต็อก', icon: ClipboardCheck },
+  { id: 'history', label: 'ประวัติรายการ', icon: History },
+];
+
+// --- Constants ---
+const REQUESTERS = [
+  'CT-CHIANGRAI',
+  'CT-NARUEPON K.',
+  'CT-SATHAPHON T.',
+  'CT-CHAYAPHON W.'
+];
+
+const SOURCES = [
+  'CT-CHIANGRAI',
+  'CT-NARUEPON K.',
+  'CT-SATHAPHON T.',
+  'CT-CHAYAPHON W.',
+  'CJ (CDC)'
+];
+
+// --- Data Structure Definitions ---
+const CATEGORIES = [
+  { id: 'All', label: 'All Categories', icon: null },
+  { id: 'Water Purifier', label: 'Water Purifier', icon: Droplets },
+  { id: 'Air Purifier', label: 'Air Purifier', icon: Wind },
+  { id: 'Bidet', label: 'Bidet', icon: Droplets }, 
+  { id: 'Softener', label: 'Softener', icon: Droplets },
+  { id: 'Point Of Entry', label: 'Point Of Entry', icon: Settings },
+  { id: 'Kit Tools', label: 'Kit Tools', icon: Wrench },
+  { id: 'Miscellaneous', label: 'Miscellaneous', icon: Package },
+];
+
+// Explicit TYPE order for sorting in Stock Check
+const TYPES = [
+  { id: 'All', label: 'All Types' },
+  { id: 'Stock', label: 'Stock', icon: Package, color: 'bg-blue-100 text-blue-800 border-blue-200' },
+  { id: 'Filter', label: 'Filter', icon: Droplets, color: 'bg-green-100 text-green-800 border-green-200' },
+  { id: 'Spare Part', label: 'Spare Part', icon: Settings, color: 'bg-orange-100 text-orange-800 border-orange-200' },
+  { id: 'Consignment Tool', label: 'Consignment Tool', icon: Wrench, color: 'bg-purple-100 text-purple-800 border-purple-200' },
+];
+
+// Mock Data Fallback
+const INITIAL_INVENTORY = [
+  { 
+    id: '1001', 
+    barcode: '8801001', 
+    name: 'ไส้กรอง Neo-Sense (8 นิ้ว)', 
+    category: 'Water Purifier', 
+    type: 'Filter', 
+    quantity: 50, 
+    minStock: 10, 
+    price: 500,
+    image: 'https://placehold.co/400x300/e2e8f0/1e293b?text=Neo-Sense+Filter',
+    serials: []
+  }
+];
+
+// --- Sub-Components ---
+const Card = ({ title, value, subtext, icon, colorClass, onClick }) => (
+  <div 
+    onClick={onClick}
+    className={`bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col justify-between h-full relative overflow-hidden ${onClick ? 'cursor-pointer hover:shadow-md transition-all active:scale-95' : ''}`}
+  >
+    <div className="flex justify-between items-start mb-2">
+      <h3 className="text-gray-500 text-xs font-medium truncate pr-2">{title}</h3>
+      <div className={`p-1.5 rounded-lg ${colorClass} text-white shrink-0`}>
+        {React.cloneElement(icon, { size: 16 })}
+      </div>
+    </div>
+    <div>
+      <div className="text-xl md:text-2xl font-bold text-gray-800 truncate">{value}</div>
+      {subtext && <div className="text-[10px] text-gray-400 mt-0.5 truncate">{subtext}</div>}
+    </div>
+  </div>
+);
+
+export default function App() {
+  const [isStyleLoaded, setIsStyleLoaded] = useState(false);
+  
+  // --- Auto-Inject Libraries (Sequential Loading Fix) ---
+  useEffect(() => {
+    const loadResources = async () => {
+      // Tailwind
+      if (!document.getElementById('tailwindcss-script')) {
+        const script = document.createElement('script');
+        script.id = 'tailwindcss-script';
+        script.src = 'https://cdn.tailwindcss.com';
+        document.head.appendChild(script);
+      }
+      // HTML5-QRCode
+      if (!document.getElementById('html5-qrcode-script')) {
+        const script = document.createElement('script');
+        script.id = 'html5-qrcode-script';
+        script.src = 'https://unpkg.com/html5-qrcode';
+        document.head.appendChild(script);
+      }
+      
+      // jsPDF & AutoTable (Strict Order Fix)
+      if (!document.getElementById('jspdf-script')) {
+        const script = document.createElement('script');
+        script.id = 'jspdf-script';
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+        script.onload = () => {
+             // IMPORTANT: Polyfill for AutoTable to find jsPDF
+             if (window.jspdf && window.jspdf.jsPDF) {
+                 window.jsPDF = window.jspdf.jsPDF;
+             }
+
+             if (!document.getElementById('jspdf-autotable-script')) {
+                const atScript = document.createElement('script');
+                atScript.id = 'jspdf-autotable-script';
+                atScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js';
+                document.head.appendChild(atScript);
+             }
+        };
+        document.head.appendChild(script);
+      }
+
+      if (!document.querySelector('meta[name="viewport"]')) {
+        const meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+        document.head.appendChild(meta);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1500)); 
+      setIsStyleLoaded(true);
+    };
+    loadResources();
+  }, []);
+
+  // State
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [inventory, setInventory] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  
+  // Default Collapsed State
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    return TYPES.filter(t => t.id !== 'All' && t.id !== 'Stock').map(t => t.id);
+  });
+  const [collapsedCheckGroups, setCollapsedCheckGroups] = useState([]); 
+  
+  // Connection State
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  
+  // Modal States
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importPreview, setImportPreview] = useState([]);
+  const [viewItem, setViewItem] = useState(null);
+
+  // Camera State
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const scannerRef = useRef(null);
+
+  // Form State
+  const [newItemForm, setNewItemForm] = useState({
+    name: '', barcode: '', category: 'Water Purifier', type: 'Stock', quantity: 0, price: 0, minStock: 5, image: '', serials: []
+  });
+  
+  // Operation State
+  const [scanCode, setScanCode] = useState('');
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [operationType, setOperationType] = useState('OUT');
+  const [opQuantity, setOpQuantity] = useState(1);
+  const [note, setNote] = useState('');
+  const [requester, setRequester] = useState('');
+  const [source, setSource] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // Serial Number State
+  const [transactionSerials, setTransactionSerials] = useState([]);
+  const [serialInput, setSerialInput] = useState('');
+
+  // Filter State
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterCategory, setFilterCategory] = useState('All');
+  const [filterType, setFilterType] = useState('All');
+
+  // --- Stock Check State ---
+  const [checkList, setCheckList] = useState([]); 
+  const [isCheckStarted, setIsCheckStarted] = useState(false);
+  
+  // Refs
+  const fileInputRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+
+  // --- Data Loading Logic ---
+  const fetchAllData = async () => {
+    try {
+      setIsRefreshing(true);
+      setConnectionStatus('connecting');
+      const response = await fetch(SHEET_API_URL);
+      const data = await response.json();
+      
+      if (data.inventory && Array.isArray(data.inventory)) {
+         const migratedInv = data.inventory.map(item => ({
+          ...item,
+          category: item.category || 'Miscellaneous',
+          type: item.type || 'Stock',
+          serials: Array.isArray(item.serials) ? item.serials : (item.serials ? JSON.parse(item.serials) : []) 
+        }));
+        setInventory(migratedInv);
+      } else if (Array.isArray(data)) {
+        setInventory(data);
+      }
+
+      if (data.transactions && Array.isArray(data.transactions)) {
+        setTransactions(data.transactions);
+      } else {
+        const savedTransactions = localStorage.getItem('coway_transactions');
+        if (savedTransactions) setTransactions(JSON.parse(savedTransactions));
+      }
+
+      setConnectionStatus('connected');
+    } catch (error) {
+      console.error("Error loading data:", error);
+      setConnectionStatus('error');
+      
+      const localInv = localStorage.getItem('coway_inventory');
+      if (localInv) setInventory(JSON.parse(localInv));
+      else setInventory(INITIAL_INVENTORY);
+
+      const localTx = localStorage.getItem('coway_transactions');
+      if (localTx) setTransactions(JSON.parse(localTx));
+    } finally {
+      setIsLoading(false);
+      setIsDataLoaded(true);
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAllData();
+  }, []);
+
+  // --- Data Saving Logic ---
+  useEffect(() => {
+    if (!isDataLoaded) return;
+    localStorage.setItem('coway_inventory', JSON.stringify(inventory));
+
+    const saveInventoryToSheet = async () => {
+      setIsSaving(true);
+      const dataToSave = inventory.map(item => ({
+          ...item,
+          serials: JSON.stringify(item.serials) 
+      }));
+
+      try {
+        await fetch(SHEET_API_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'update_inventory', data: dataToSave })
+        });
+        setConnectionStatus('connected');
+      } catch (error) {
+        setConnectionStatus('error');
+      } finally {
+        setIsSaving(false);
+      }
+    };
+
+    const timeoutId = setTimeout(saveInventoryToSheet, 2000); 
+    return () => clearTimeout(timeoutId);
+  }, [inventory, isDataLoaded]);
+
+  useEffect(() => {
+    if (isDataLoaded) {
+      localStorage.setItem('coway_transactions', JSON.stringify(transactions));
+    }
+  }, [transactions, isDataLoaded]);
+
+
+  // --- Handlers & Helpers ---
+  const handleScroll = () => {
+    if (scrollContainerRef.current) {
+      const { scrollTop } = scrollContainerRef.current;
+      setShowScrollTop(scrollTop > 300);
+    }
+  };
+
+  const scrollToTop = () => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const toggleGroup = (groupId) => {
+    setCollapsedGroups(prev => 
+      prev.includes(groupId) 
+        ? prev.filter(id => id !== groupId) 
+        : [...prev, groupId]
+    );
+  };
+
+  const toggleCheckGroup = (groupId) => {
+    setCollapsedCheckGroups(prev => 
+      prev.includes(groupId) 
+        ? prev.filter(id => id !== groupId) 
+        : [...prev, groupId]
+    );
+  };
+
+  const findItem = (code) => {
+    code = code.trim();
+    if (!code) return null;
+    let item = inventory.find(i => String(i.barcode) === code || String(i.id) === code);
+    if (!item) {
+        item = inventory.find(i => i.serials && Array.isArray(i.serials) && i.serials.includes(code));
+    }
+    return item;
+  };
+
+  const handleScan = (e) => {
+    if (e) e.preventDefault();
+    
+    const item = findItem(scanCode);
+    
+    if (item) { 
+        setSelectedItem(item); 
+        setScanCode(''); 
+        
+        if (item.serials && item.serials.includes(scanCode)) {
+            setTransactionSerials([scanCode]);
+            setOpQuantity(1);
+        } else {
+            setTransactionSerials([]);
+            setOpQuantity(1);
+        }
+        setErrorMsg(''); 
+    } 
+    else { 
+        setErrorMsg(`ไม่พบสินค้ารหัส: ${scanCode}`);
+    }
+  };
+
+  const handleAddSerial = () => {
+    const code = serialInput.trim();
+    if (!code) return;
+    
+    setErrorMsg(''); 
+
+    if (transactionSerials.includes(code)) {
+        setErrorMsg(`Serial ${code} ถูกเพิ่มไปแล้ว`);
+        return;
+    }
+
+    if (operationType === 'IN') {
+        if (selectedItem.serials && selectedItem.serials.includes(code)) {
+            setErrorMsg(`Serial ${code} มีอยู่ในระบบแล้ว ไม่สามารถรับเข้าซ้ำได้`);
+            return;
+        }
+    } else if (operationType === 'OUT') {
+        if (selectedItem.serials && !selectedItem.serials.includes(code)) {
+            setErrorMsg(`ไม่พบ Serial ${code} ในสต็อกของสินค้านี้`);
+            return;
+        }
+    }
+
+    const newSerials = [...transactionSerials, code];
+    setTransactionSerials(newSerials);
+    setOpQuantity(newSerials.length); 
+    setSerialInput('');
+  };
+
+  const handleRemoveSerial = (sToRemove) => {
+    const newSerials = transactionSerials.filter(s => s !== sToRemove);
+    setTransactionSerials(newSerials);
+    setOpQuantity(newSerials.length);
+  };
+
+  const toggleSelectSerial = (s) => {
+     if (transactionSerials.includes(s)) {
+         handleRemoveSerial(s);
+     } else {
+         const newSerials = [...transactionSerials, s];
+         setTransactionSerials(newSerials);
+         setOpQuantity(newSerials.length);
+     }
+  };
+
+  const executeTransaction = async () => {
+    if (!selectedItem) return;
+    
+    let finalQuantity = parseInt(opQuantity);
+    let finalNote = note;
+
+    if (selectedItem.type === 'Stock') {
+        if (transactionSerials.length === 0) {
+            alert(`กรุณา${operationType === 'IN' ? 'เพิ่ม' : 'สแกน'} Serial Number อย่างน้อย 1 รายการ`);
+            return;
+        }
+        finalQuantity = transactionSerials.length;
+        const serialsString = transactionSerials.join(', ');
+        finalNote = `${note ? note + ' ' : ''}[S/N: ${serialsString}]`;
+    } else {
+        if (finalQuantity <= 0) { alert('จำนวนต้องมากกว่า 0'); return; }
+        if (operationType === 'OUT' && selectedItem.quantity < finalQuantity) { alert('สินค้าไม่พอ'); return; }
+    }
+
+    if (operationType === 'OUT' && !requester) { alert('กรุณาเลือกผู้เบิกสินค้า'); return; }
+    if (operationType === 'IN' && !source) { alert('กรุณาเลือกรับสินค้าจาก'); return; }
+
+    const newInventory = inventory.map(item => {
+      if (item.id === selectedItem.id) {
+        let updatedSerials = item.serials || [];
+        
+        if (item.type === 'Stock') {
+            if (operationType === 'IN') {
+                updatedSerials = [...updatedSerials, ...transactionSerials];
+            } else {
+                updatedSerials = updatedSerials.filter(s => !transactionSerials.includes(s));
+            }
+        }
+
+        return {
+          ...item,
+          quantity: operationType === 'IN' ? item.quantity + finalQuantity : item.quantity - finalQuantity,
+          serials: updatedSerials
+        };
+      }
+      return item;
+    });
+    setInventory(newInventory);
+    
+    const newTx = {
+      id: Date.now(),
+      itemId: selectedItem.id,
+      itemName: selectedItem.name,
+      type: operationType,
+      quantity: finalQuantity,
+      date: formatThaiDateTime(new Date()),
+      note: finalNote,
+      requester: operationType === 'OUT' ? requester : source
+    };
+
+    setTransactions([newTx, ...transactions]);
+    setSelectedItem(null); setOpQuantity(1); setNote(''); setRequester(''); setSource(''); setScanCode(''); setTransactionSerials([]); setSerialInput(''); setErrorMsg('');
+
+    try {
+      await fetch(SHEET_API_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        body: JSON.stringify({ action: 'add_transaction', data: newTx })
+      });
+    } catch (err) { console.error("Failed to save transaction", err); }
+  };
+
+  // --- Stock Check Logic ---
+  const initStockCheck = () => {
+      const initList = inventory
+        .filter(item => item.type !== 'Consignment Tool')
+        .map(item => ({
+            id: item.id,
+            barcode: item.barcode,
+            name: item.name,
+            image: item.image,
+            category: item.category, 
+            type: item.type,
+            expectedQty: item.quantity,
+            actualQty: 0,
+            serials: item.serials || [],
+            countedSerials: []
+        }));
+      setCheckList(initList);
+      setIsCheckStarted(true);
+  };
+
+  const handleStockCheckScan = (code) => {
+      code = code.trim();
+      if (!code) return;
+
+      let itemIndex = checkList.findIndex(i => i.barcode === code || i.id === code);
+      
+      let isSerialScan = false;
+      if (itemIndex === -1) {
+          itemIndex = checkList.findIndex(i => i.type === 'Stock' && i.serials.includes(code));
+          if (itemIndex !== -1) isSerialScan = true;
+      }
+
+      if (itemIndex !== -1) {
+          const newList = [...checkList];
+          const item = newList[itemIndex];
+          
+          if (item.type === 'Stock') {
+              if (isSerialScan) {
+                  if (!item.countedSerials.includes(code)) {
+                      item.countedSerials.push(code);
+                      item.actualQty = item.countedSerials.length;
+                  } else {
+                      alert('Serial นี้ถูกนับไปแล้ว');
+                  }
+              } else {
+                  alert(`สินค้า ${item.name} เป็นสินค้ามี Serial กรุณาสแกนที่ Barcode ของ Serial โดยตรง`);
+              }
+          } else {
+              item.actualQty += 1;
+          }
+          
+          setCheckList(newList);
+          setScanCode('');
+          if (navigator.vibrate) navigator.vibrate(200);
+      } else {
+          alert(`ไม่พบสินค้ารหัส: ${code} ในระบบสต็อกปัจจุบัน (หรืออาจเป็น Consignment Tool)`);
+      }
+  };
+
+  const downloadCheckCSV = () => {
+      const headers = ['ชื่อสินค้า,บาร์โค้ด,ประเภท,จำนวนในระบบ,จำนวนที่นับได้,ผลต่าง,หมายเหตุ'];
+      const rows = checkList.map(item => {
+          const diff = item.actualQty - item.expectedQty;
+          let note = '';
+          if (item.type === 'Stock') {
+             const missing = item.serials.filter(s => !item.countedSerials.includes(s));
+             if (missing.length > 0) note += `Missing: ${missing.join(' ')} `;
+          }
+          return `"${item.name}",${item.barcode},${item.type},${item.expectedQty},${item.actualQty},${diff},"${note}"`;
+      });
+      
+      const csvContent = "\uFEFF" + [headers, ...rows].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Stock_Count_Report_${new Date().toLocaleDateString().replace(/\//g,'-')}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
+
+  const downloadCheckPDF = () => {
+      if (!window.jspdf || !window.jspdf.jsPDF) return alert('PDF Library Loading... Please wait a moment.');
+      
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      const today = new Date().toLocaleString('th-TH');
+
+      doc.setFontSize(12);
+      doc.text("Stock Counting Report", 14, 15);
+      
+      doc.setFontSize(9);
+      doc.text(`Branch: T060-DSC CRI`, 14, 25);
+      doc.text(`Location Grade: A`, 14, 30);
+      doc.text(`Counting Date: ${today}`, 140, 25);
+      doc.text(`Auditor: Admin`, 140, 30);
+
+      const typeOrder = ['Stock', 'Filter', 'Spare Part'];
+      
+      const sortedList = [...checkList]
+        .filter(i => typeOrder.includes(i.type))
+        .sort((a, b) => {
+          const indexA = typeOrder.indexOf(a.type);
+          const indexB = typeOrder.indexOf(b.type);
+          
+          if (indexA !== -1 && indexB !== -1) {
+              if (indexA !== indexB) return indexA - indexB;
+              return String(a.barcode).localeCompare(String(b.barcode), undefined, {numeric: true});
+          }
+          return 0;
+      });
+
+      const tableBody = sortedList.map(item => {
+          const diff = item.actualQty - item.expectedQty;
+          return [
+              item.name,      
+              item.barcode,   
+              item.type,   
+              item.expectedQty, 
+              item.actualQty,   
+              diff !== 0 ? diff : '',
+              item.type
+          ];
+      });
+
+      doc.autoTable({
+          startY: 35,
+          head: [['Model Name', 'Code', 'Type', 'System Qty', 'Actual Qty', 'Diff']],
+          body: tableBody,
+          theme: 'grid',
+          styles: { fontSize: 8, cellPadding: 2, valign: 'middle' },
+          headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], lineWidth: 0.1, lineColor: [0, 0, 0] },
+          columnStyles: {
+              0: { cellWidth: 60 },
+              1: { cellWidth: 25 },
+              2: { cellWidth: 25 },
+              3: { halign: 'center' },
+              4: { halign: 'center' },
+              5: { halign: 'center', fontStyle: 'bold' }
+          },
+          didDrawPage: function (data) { },
+      });
+      
+      const finalY = doc.lastAutoTable.finalY || 40;
+      doc.text("__________________________", 14, finalY + 20);
+      doc.text("Confirmed By", 14, finalY + 26);
+
+      doc.save(`Stock_Report_PDF_${Date.now()}.pdf`);
+  };
+
+  // --- Camera Logic ---
+  useEffect(() => {
+    let html5QrCode;
+    if (isCameraOpen && window.Html5Qrcode) {
+        const startScanning = async () => {
+            if (!document.getElementById("reader")) return;
+            try {
+                html5QrCode = new window.Html5Qrcode("reader");
+                scannerRef.current = html5QrCode;
+                
+                const config = { fps: 30, aspectRatio: 1.0, disableFlip: false };
+                const startParams = { facingMode: "environment" };
+
+                await html5QrCode.start(
+                    startParams, 
+                    config,
+                    (decodedText) => {
+                        if (navigator.vibrate) navigator.vibrate(200);
+                        const code = decodedText.trim();
+                        
+                        if (activeTab === 'stockcheck' && isCheckStarted) {
+                            handleStockCheckScan(code);
+                            return;
+                        }
+
+                        if (showAddModal) {
+                             setNewItemForm(prev => ({ ...prev, barcode: code }));
+                             setIsCameraOpen(false);
+                             if (html5QrCode) html5QrCode.stop().catch(()=>{});
+                             return;
+                        }
+                        
+                        const item = findItem(code);
+                        
+                        if (item) {
+                            setScanCode(code);
+                            setSelectedItem(item);
+                            
+                            if (item.serials && item.serials.includes(code)) {
+                                setTransactionSerials([code]);
+                                setOpQuantity(1);
+                            } else {
+                                setTransactionSerials([]);
+                                setOpQuantity(1);
+                            }
+                            setErrorMsg('');
+                            setIsCameraOpen(false);
+                            if (html5QrCode) html5QrCode.stop().catch(()=>{});
+                            
+                        } else {
+                            if (selectedItem && selectedItem.type === 'Stock' && (operationType === 'IN' || operationType === 'OUT')) {
+                                 setSerialInput(code);
+                                 setIsCameraOpen(false);
+                                 if (html5QrCode) html5QrCode.stop().catch(()=>{});
+                            } else {
+                                 setScanCode(code);
+                                 setErrorMsg(`ไม่พบสินค้า: ${code}`);
+                                 setIsCameraOpen(false);
+                                 if (html5QrCode) html5QrCode.stop().catch(()=>{});
+                            }
+                        }
+                    },
+                    () => {}
+                );
+            } catch (err) { console.error("Error", err); alert("ไม่สามารถเปิดกล้องได้: " + err); setIsCameraOpen(false); }
+        };
+        setTimeout(startScanning, 500);
+    } 
+    return () => { if (scannerRef.current) { try { if (scannerRef.current.isScanning) { scannerRef.current.stop().catch(()=>{}); } scannerRef.current.clear(); } catch(e) {} scannerRef.current = null; } };
+  }, [isCameraOpen, inventory, selectedItem, operationType, showAddModal, activeTab, isCheckStarted, checkList]);
+
+  const toggleCamera = () => setIsCameraOpen(!isCameraOpen);
+  const toggleTorch = () => { if (scannerRef.current) { try { scannerRef.current.applyVideoConstraints({ advanced: [{ torch: !torchOn }] }).then(() => setTorchOn(!torchOn)).catch(e => console.log(e)); } catch(e) { console.log("Torch not supported"); } } };
+  const handleImageUpload = (e) => { const file = e.target.files[0]; if(!file)return; const reader = new FileReader(); reader.onload = (ev) => { const img=new Image(); img.onload=()=>{ const canvas=document.createElement('canvas'); const ctx=canvas.getContext('2d'); const MAX_SIZE=300; let width=img.width; let height=img.height; if(width>height){if(width>MAX_SIZE){height*=MAX_SIZE/width;width=MAX_SIZE;}}else{if(height>MAX_SIZE){width*=MAX_SIZE/height;height=MAX_SIZE;}} canvas.width=width; canvas.height=height; ctx.drawImage(img,0,0,width,height); setNewItemForm({...newItemForm, image:canvas.toDataURL('image/jpeg',0.6)}); }; img.src=ev.target.result; }; reader.readAsDataURL(file); };
+  const handleSubmitNewItem = (e) => { e.preventDefault(); if(!newItemForm.name || !newItemForm.barcode) return alert('กรอกข้อมูลให้ครบ'); const processedItem = { ...newItemForm, quantity: parseInt(newItemForm.quantity)||0, price: parseInt(newItemForm.price)||0, minStock: parseInt(newItemForm.minStock)||0, image: newItemForm.image || `https://placehold.co/400x300/e2e8f0/1e293b?text=${newItemForm.name.substring(0, 10)}`, serials: [] }; if(editingId) setInventory(inventory.map(item => item.id === editingId ? { ...processedItem, id: editingId, serials: item.serials } : item)); else setInventory([...inventory, { ...processedItem, id: Date.now().toString() }]); setShowAddModal(false); };
+  const handleDeleteItem = (id) => { if(window.confirm('ลบสินค้านี้?')) { setInventory(inventory.filter(item => item.id !== id)); } };
+  const openAddModal = () => { setEditingId(null); setNewItemForm({ name: '', barcode: '', category: 'Water Purifier', type: 'Stock', quantity: 0, price: 0, minStock: 5, image: '', serials: [] }); setShowAddModal(true); };
+  const openEditModal = (item) => { setEditingId(item.id); setNewItemForm({ ...item }); setShowAddModal(true); };
+  const handleDownloadTemplate = () => { const headers = ['name,barcode,category,type,quantity,price,minStock']; const sampleData = ['ไส้กรอง Sample,8850001,Water Purifier,Filter,10,500,5']; const csvContent = "\uFEFF" + [headers, ...sampleData].join('\n'); const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = "coway_template.csv"; document.body.appendChild(link); link.click(); document.body.removeChild(link); };
+  const handleFileChange = (e) => { const file = e.target.files[0]; if(!file)return; const reader = new FileReader(); reader.onload = (event) => { const lines = event.target.result.split('\n'); const newItems = []; lines.forEach((line, index) => { if(!line.trim()) return; const cols = line.split(',').map(c => c.trim()); if(index === 0) { if(cols[0]?.toLowerCase() === 'name' || cols[1]?.toLowerCase() === 'barcode') return; } if(cols.length >= 2) { newItems.push({ id: Date.now().toString() + Math.random().toString(36).substr(2, 5) + index, name: cols[0] || 'Unknown', barcode: cols[1] || 'NoCode', category: cols[2] || 'Miscellaneous', type: cols[3] || 'Stock', quantity: parseInt(cols[4]) || 0, price: parseInt(cols[5]) || 0, minStock: parseInt(cols[6]) || 5, image: `https://placehold.co/400x300/e2e8f0/1e293b?text=${(cols[0] || 'Item').substring(0, 6)}`, serials: [] }); } }); setImportPreview(newItems); }; reader.readAsText(file); if(fileInputRef.current) fileInputRef.current.value = ''; };
+  const confirmImport = () => { if(importPreview.length === 0) return alert('ไม่มีข้อมูล'); setInventory(prev => [...prev, ...importPreview]); setImportPreview([]); setShowImportModal(false); };
+
+  // --- RENDER FUNCTIONS ---
+  const renderDashboard = () => {
+    const totalStockCount = inventory.reduce((acc, curr) => parseInt(acc) + parseInt(curr.quantity || 0), 0);
+    const totalValue = inventory.reduce((acc, curr) => acc + (curr.quantity * curr.price), 0);
+    const lowStockItems = inventory.filter(i => i.quantity <= i.minStock).length;
+    return (
+      <div className="space-y-4 p-4">
+        <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          <Card title="สินค้าใกล้หมด" value={isLoading ? '...' : lowStockItems} subtext="ต้องสั่งเพิ่ม" icon={<AlertTriangle />} colorClass="bg-orange-500 cursor-pointer hover:shadow-md active:scale-95 transition-all" onClick={() => { setActiveTab('lowstock'); }} />
+          <Card title="สินค้าทั้งหมด" value={isLoading ? '...' : inventory.length} subtext="รายการ" icon={<Package />} colorClass="bg-blue-500" />
+          <Card title="ชิ้นงานรวม" value={isLoading ? '...' : totalStockCount.toLocaleString()} subtext="ชิ้น" icon={<LayoutDashboard />} colorClass="bg-indigo-500" />
+          <Card title="มูลค่ารวม" value={isLoading ? '...' : `฿${(totalValue/1000).toFixed(1)}k`} subtext="บาท" icon={<ArrowUpCircle />} colorClass="bg-green-500" />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+           {TYPES.filter(t => t.id !== 'All').map(type => {
+             const count = inventory.filter(i => i.type === type.id).length;
+             return (<div key={type.id} className={`p-3 rounded-lg border ${type.color.replace('text', 'border').replace('800', '200')} bg-white flex justify-between items-center`}><span className="text-xs font-bold text-gray-600">{type.label}</span><span className={`text-sm font-bold ${type.color.split(' ')[1]}`}>{count}</span></div>)
+           })}
+        </div>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-3 border-b border-gray-100 flex justify-between items-center"><h3 className="font-semibold text-gray-800 text-sm">รายการล่าสุด</h3><button onClick={() => setActiveTab('history')} className="text-xs text-blue-600">ดูทั้งหมด</button></div>
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs md:text-sm"><thead className="bg-gray-50 text-gray-600"><tr><th className="p-3 w-20">เวลา</th><th className="p-3">รายการ</th><th className="p-3">ผู้ดำเนินการ</th><th className="p-3 text-right w-16">จำนวน</th></tr></thead><tbody className="divide-y divide-gray-100">{transactions.slice(0, 5).map(tx => (<tr key={tx.id}><td className="p-3 text-gray-500 truncate max-w-[80px]">{tx.date.split(' ')[0]}</td><td className="p-3 font-medium truncate max-w-[120px]">{tx.itemName}<br/><span className={`px-1.5 py-0.5 rounded text-[10px] ${tx.type === 'IN' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{tx.type === 'IN' ? 'รับ' : 'เบิก'}</span></td><td className="p-3 text-gray-700 text-xs">{tx.requester || '-'}</td><td className="p-3 text-right font-bold">{tx.quantity}</td></tr>))}</tbody></table></div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderOperation = () => (
+    <div className="max-w-2xl mx-auto space-y-6 p-4">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+        <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><ScanLine className="text-blue-600" size={24} /> จุดสแกนสินค้า (เบิก/คืน)</h2>
+        {errorMsg && (<div className="bg-red-50 border-l-4 border-red-500 p-4 mb-4 animate-pulse"><div className="flex items-center"><AlertCircle size={20} className="text-red-500 mr-2" /><p className="text-red-700 font-bold text-sm">{errorMsg}</p></div></div>)}
+        {isCameraOpen && (
+           <div className="mb-4 bg-black rounded-lg overflow-hidden relative shadow-inner animate-fade-in">
+              <div id="reader" className="w-full h-64 bg-black"></div>
+              <button onClick={toggleCamera} className="absolute top-2 right-2 bg-white/20 hover:bg-white/40 text-white p-2 rounded-full backdrop-blur-sm z-10 pointer-events-auto"><X size={20} /></button>
+              <button onClick={toggleTorch} className="absolute top-2 left-2 bg-white/20 hover:bg-white/40 text-white p-2 rounded-full backdrop-blur-sm z-10 pointer-events-auto">{torchOn ? <Zap size={20} fill="yellow" className="text-yellow-300" /> : <ZapOff size={20} />}</button>
+              <p className="text-center text-white/50 text-[10px] pb-2 absolute bottom-0 w-full pointer-events-none z-10">สแกนบาร์โค้ดในหน้าจอ</p>
+           </div>
+        )}
+        {!selectedItem ? (
+          <div className="space-y-4">
+            <form onSubmit={handleScan} className="relative">
+              <label className="block text-sm font-medium text-gray-700 mb-1">สแกนบาร์โค้ด หรือ กรอกรหัสสินค้า</label>
+              <div className="flex gap-2">
+                <input autoFocus type="text" value={scanCode} onChange={(e) => { setScanCode(e.target.value); setErrorMsg(''); }} placeholder="ยิงบาร์โค้ดที่นี่..." className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-lg" />
+                <button type="button" onClick={() => setIsCameraOpen(!isCameraOpen)} className={`px-4 py-3 rounded-lg border transition ${isCameraOpen ? 'bg-red-50 border-red-200 text-red-600' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'}`}><Camera size={24} /></button>
+                <button type="submit" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition shadow-md"><Search size={20} /></button>
+              </div>
+              {scanCode && (
+                  <div className="absolute z-20 w-full bg-white mt-1 border border-gray-200 rounded-xl shadow-xl max-h-60 overflow-y-auto">
+                    {inventory.filter(item => String(item.barcode).toLowerCase().includes(scanCode.toLowerCase()) || String(item.name).toLowerCase().includes(scanCode.toLowerCase())).slice(0, 5).map(item => (
+                        <div key={item.id} onClick={() => { setSelectedItem(item); setScanCode(''); setTransactionSerials([]); setErrorMsg(''); }} className="p-3 border-b border-gray-100 hover:bg-blue-50 cursor-pointer flex justify-between items-center">
+                           <div><div className="font-bold text-sm text-gray-800 line-clamp-2">{item.name}</div><div className="text-xs text-gray-500 font-mono">{item.barcode}</div></div>
+                           <div className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">{item.quantity}</div>
+                        </div>
+                    ))}
+                  </div>
+              )}
+            </form>
+
+            <div className="pt-4">
+              <h3 className="text-sm font-bold text-gray-500 mb-3 px-1 flex items-center gap-2"><Package size={16}/> รายการสินค้า (Stock)</h3>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                {inventory.filter(i => i.type === 'Stock').sort((a,b) => String(a.barcode).localeCompare(String(b.barcode), undefined, {numeric: true})).map(item => (
+                  <div key={item.id} onClick={() => { setSelectedItem(item); setScanCode(''); setTransactionSerials([]); setErrorMsg(''); }} className="bg-white p-2 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col items-center text-center active:scale-95">
+                     <div className="w-full aspect-square bg-gray-50 rounded-lg mb-2 overflow-hidden">
+                        <img src={item.image} className="w-full h-full object-contain mix-blend-multiply" onError={(e) => e.target.src = 'https://placehold.co/100'} />
+                     </div>
+                     <div className="w-full">
+                        <h4 className="text-[10px] font-bold text-gray-800 w-full leading-tight line-clamp-2">{item.name}</h4>
+                        <p className="text-[9px] text-gray-400 font-mono mt-0.5">{item.barcode}</p>
+                     </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex gap-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
+               <div className="w-24 h-24 bg-white rounded-lg overflow-hidden border border-blue-100 shrink-0"><img src={selectedItem.image} className="w-full h-full object-cover" onError={(e) => e.target.style.display='none'} /></div>
+               <div className="flex-1 min-w-0 flex flex-col justify-center"><div className="flex items-center gap-2 mb-2"><span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">{String(selectedItem.category)}</span><span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{String(selectedItem.type)}</span></div><h3 className="font-bold text-gray-900 text-lg leading-tight line-clamp-2 break-words">{selectedItem.name}</h3><p className="text-sm text-gray-500 font-mono">{selectedItem.barcode}</p></div>
+               <div className="text-right flex flex-col justify-center px-2"><span className="text-sm text-gray-500">คงเหลือ</span><span className="text-3xl font-bold text-blue-700">{selectedItem.quantity}</span></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <button onClick={() => { setOperationType('OUT'); setOpQuantity(1); setErrorMsg(''); }} className={`p-4 rounded-xl border-2 text-center transition active:scale-95 ${operationType === 'OUT' ? 'border-red-500 bg-red-50 text-red-700 ring-2 ring-red-200' : 'border-gray-200 hover:border-gray-300'}`}><ArrowUpCircle className="mx-auto mb-2" size={28} /><div className="font-bold text-lg">เบิกของออก</div></button>
+              <button onClick={() => { setOperationType('IN'); setOpQuantity(1); setErrorMsg(''); }} className={`p-4 rounded-xl border-2 text-center transition active:scale-95 ${operationType === 'IN' ? 'border-green-500 bg-green-50 text-green-700 ring-2 ring-green-200' : 'border-gray-200 hover:border-gray-300'}`}><ArrowDownCircle className="mx-auto mb-2" size={28} /><div className="font-bold text-lg">รับของเข้า/คืน</div></button>
+            </div>
+            <div className="space-y-4 bg-gray-50 p-4 rounded-xl">
+               {selectedItem.type === 'Stock' ? (
+                   <div className="space-y-3">
+                      <div className="flex justify-between items-center"><label className="text-sm font-bold text-gray-700 flex items-center gap-2"><Tag size={16} /> {operationType === 'IN' ? 'เพิ่ม Serial Number' : 'สแกน Serial เพื่อเบิก'}</label><span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">{transactionSerials.length} รายการ</span></div>
+                      <div className="flex gap-2"><input type="text" value={serialInput} onChange={(e) => { setSerialInput(e.target.value); setErrorMsg(''); }} onKeyDown={(e) => e.key === 'Enter' && handleAddSerial()} placeholder="พิมพ์/ยิง S/N แล้ว Enter" className="flex-1 p-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" /><button onClick={handleAddSerial} className="bg-green-600 text-white px-3 rounded-lg hover:bg-green-700"><Plus size={20}/></button><button onClick={() => setIsCameraOpen(true)} className="bg-gray-100 text-gray-600 px-3 rounded-lg border hover:bg-gray-200"><Camera size={20}/></button></div>
+                      {transactionSerials.length > 0 && (<div className="flex flex-wrap gap-2 mt-2">{transactionSerials.map(s => (<span key={s} className="bg-white border border-green-200 text-green-800 px-2 py-1 rounded text-xs flex items-center gap-1 shadow-sm">{s} <X size={12} className="cursor-pointer text-red-400 hover:text-red-600" onClick={() => handleRemoveSerial(s)} /></span>))}</div>)}
+                   </div>
+               ) : (
+                  <div><label className="block text-sm font-medium text-gray-700 mb-1">ระบุจำนวน</label><div className="flex items-center gap-2"><button onClick={() => setOpQuantity(Math.max(1, opQuantity - 1))} className="w-10 h-10 rounded-lg bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 active:scale-95 transition"><Minus size={20}/></button><input type="number" min="1" value={opQuantity} onChange={(e) => setOpQuantity(parseInt(e.target.value) || 1)} className="flex-1 p-3 border border-gray-300 rounded-lg text-center font-bold text-2xl focus:ring-2 focus:ring-blue-500 outline-none" /><button onClick={() => setOpQuantity(opQuantity + 1)} className="w-10 h-10 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center hover:bg-blue-200 active:scale-95 transition"><Plus size={20}/></button></div></div>
+               )}
+              {operationType === 'OUT' && (<div><label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2"><User size={16} /> ผู้เบิกสินค้า <span className="text-red-500">*</span></label><select value={requester} onChange={(e) => setRequester(e.target.value)} className="w-full p-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"><option value="">-- กรุณาเลือกผู้เบิก --</option>{REQUESTERS.map(r => (<option key={r} value={r}>{r}</option>))}</select></div>)}
+              {operationType === 'IN' && (<div><label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2"><Truck size={16} /> รับสินค้าจาก <span className="text-red-500">*</span></label><select value={source} onChange={(e) => setSource(e.target.value)} className="w-full p-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"><option value="">-- กรุณาเลือกที่มาสินค้า --</option>{SOURCES.map(s => (<option key={s} value={s}>{s}</option>))}</select></div>)}
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">หมายเหตุ (ถ้ามี)</label><input type="text" value={note} onChange={(e) => setNote(e.target.value)} className="w-full p-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" /></div>
+            </div>
+            <div className="flex gap-3 pt-2"><button onClick={() => { setSelectedItem(null); setErrorMsg(''); }} className="flex-1 py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-medium">ยกเลิก</button><button onClick={executeTransaction} className={`flex-[2] py-3 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 ${operationType === 'OUT' ? 'bg-red-600' : 'bg-green-600'}`}><CheckCircle2 size={20} /> ยืนยัน</button></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderInventory = () => {
+    const searchFiltered = inventory.filter(item => {
+      const name = String(item.name || '').toLowerCase();
+      const barcode = String(item.barcode || '').toLowerCase();
+      const term = searchTerm.toLowerCase();
+      return name.includes(term) || barcode.includes(term);
+    });
+    
+    let filteredList = searchFiltered;
+    if (filterCategory !== 'All') filteredList = filteredList.filter(i => i.category === filterCategory);
+    if (filterType !== 'All') filteredList = filteredList.filter(i => i.type === filterType);
+    
+    const finalFiltered = filteredList;
+    const typesToShow = filterType === 'All' ? TYPES.filter(t => t.id !== 'All') : TYPES.filter(t => t.id === filterType);
+
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-col gap-2 bg-white/95 backdrop-blur p-3 rounded-b-xl shadow-sm sticky top-0 z-30 border-b border-gray-100">
+          <div className="flex gap-2"><div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input type="text" placeholder="ค้นหา..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"/></div></div>
+          <div className="flex gap-2"><div className="flex-1 relative"><Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="w-full pl-8 p-2 border border-gray-200 rounded-lg text-xs bg-white appearance-none focus:outline-none">{CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div><div className="flex-1 relative"><Tag size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-full pl-8 p-2 border border-gray-200 rounded-lg text-xs bg-white appearance-none focus:outline-none">{TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
+          <div className="flex gap-2 pt-1 border-t border-gray-50"><button onClick={() => { setShowImportModal(true); setImportPreview([]); }} className="flex-1 flex items-center justify-center gap-1 bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg text-xs font-medium"><FileUp size={14} /> Import</button><button onClick={openAddModal} className="flex-1 flex items-center justify-center gap-1 bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-sm"><Plus size={14} /> เพิ่มสินค้า</button></div>
+        </div>
+
+        <div className="pb-16 space-y-6 p-4">
+          {typesToShow.map(type => {
+            const typeItems = finalFiltered.filter(item => item.type === type.id);
+            if (typeItems.length === 0) return null;
+            const isCollapsed = collapsedGroups.includes(type.id);
+
+            return (
+              <div key={type.id} className="animate-fade-in">
+                <div 
+                    className="flex items-center gap-2 mb-3 px-1 cursor-pointer select-none group hover:bg-gray-50 rounded-lg p-2 transition-colors"
+                    onClick={() => toggleGroup(type.id)}
+                >
+                  <div className={`p-2 rounded-lg ${type.color ? type.color.split(' ')[0] : 'bg-gray-100'}`}>
+                    {type.icon && React.createElement(type.icon, { size: 18, className: type.color ? type.color.split(' ')[1] : 'text-gray-600' })}
+                  </div>
+                  <span className="text-sm font-bold text-gray-800">{type.label}</span>
+                  <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-[10px] font-semibold rounded-full">{typeItems.length}</span>
+                  <div className="h-px bg-gray-100 flex-1 ml-2"></div>
+                  <div className="text-gray-400">{isCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}</div>
+                </div>
+
+                {!isCollapsed && (
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                    {typeItems.map(item => (
+                        <div key={item.id} onClick={() => setViewItem(item)} className={`group bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-lg transition-all duration-300 cursor-pointer flex flex-col overflow-hidden`}>
+                            <div className="relative aspect-square bg-white overflow-hidden p-2"><img src={item.image} className="w-full h-full object-contain transition-transform duration-700 group-hover:scale-110" onError={(e) => {e.target.src = 'https://placehold.co/400x300/e2e8f0/1e293b?text=No+Image'}} />{item.quantity <= item.minStock && (<div className="absolute top-2 right-2 bg-white/95 backdrop-blur text-orange-600 text-[10px] font-bold px-2 py-1 rounded-full shadow-sm flex items-center gap-1 border border-orange-100"><AlertTriangle size={10} /> เติมของด่วน</div>)}</div>
+                            <div className="p-4 flex-1 flex flex-col gap-2">
+                                <div className="flex flex-wrap gap-1.5"><span className="text-[10px] font-medium px-2 py-0.5 bg-blue-50 text-blue-600 rounded-md border border-blue-100 truncate max-w-[100px]">{item.category}</span></div>
+                                <h3 className="font-bold text-gray-800 text-sm leading-tight line-clamp-2 break-words h-10 group-hover:text-blue-600 transition-colors" title={item.name}>{item.name}</h3>
+                                <div className="flex items-center gap-1.5 text-gray-400 mb-1"><ScanLine size={12} /><p className="text-[10px] font-mono tracking-wide">{item.barcode}</p></div>
+                                <div className="mt-auto pt-3 border-t border-dashed border-gray-100 flex items-end justify-between"><div><p className="text-[10px] text-gray-400 font-medium mb-0.5">ราคา/หน่วย</p><p className="text-sm font-bold text-gray-700">฿{item.price.toLocaleString()}</p></div><div className="text-right"><p className="text-[10px] text-gray-400 font-medium mb-0.5">คงเหลือ</p><div className={`text-xl font-bold leading-none flex items-center justify-end gap-1 ${item.quantity <= item.minStock ? 'text-orange-500' : 'text-blue-600'}`}>{item.quantity} <span className="text-[10px] font-normal text-gray-400">ชิ้น</span></div></div></div>
+                            </div>
+                        </div>
+                    ))}
+                    </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderLowStock = () => {
+    const lowStockItems = inventory.filter(item => item.quantity <= item.minStock);
+    
+    const searchFiltered = lowStockItems.filter(item => {
+      const name = String(item.name || '').toLowerCase();
+      const barcode = String(item.barcode || '').toLowerCase();
+      const term = searchTerm.toLowerCase();
+      return name.includes(term) || barcode.includes(term);
+    });
+
+    let filteredList = searchFiltered;
+    if (filterCategory !== 'All') filteredList = filteredList.filter(i => i.category === filterCategory);
+    if (filterType !== 'All') filteredList = filteredList.filter(i => i.type === filterType);
+    
+    const finalFiltered = filteredList;
+    const typesToShow = filterType === 'All' ? TYPES.filter(t => t.id !== 'All') : TYPES.filter(t => t.id === filterType);
+
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-col gap-2 bg-white/95 backdrop-blur p-3 rounded-b-xl shadow-sm sticky top-0 z-30 border-b border-gray-100">
+           <div className="flex items-center gap-2 mb-2 text-orange-600 font-bold"><AlertTriangle size={20} /><span>สินค้าใกล้หมด ({lowStockItems.length})</span></div>
+           <div className="flex gap-2"><div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input type="text" placeholder="ค้นหาสินค้าใกล้หมด..." className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div></div>
+           <div className="flex gap-2"><div className="flex-1 relative"><Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="w-full pl-8 p-2 border border-gray-200 rounded-lg text-xs bg-white appearance-none focus:outline-none">{CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div><div className="flex-1 relative"><Tag size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-full pl-8 p-2 border border-gray-200 rounded-lg text-xs bg-white appearance-none focus:outline-none">{TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
+        </div>
+        
+        <div className="pb-16 space-y-6 p-4">
+           {typesToShow.map(type => {
+              const typeItems = finalFiltered.filter(item => item.type === type.id);
+              if (typeItems.length === 0) return null;
+              const isCollapsed = collapsedGroups.includes(type.id);
+              
+              return (
+                <div key={type.id} className="animate-fade-in">
+                    <div className="flex items-center gap-2 mb-3 px-1 cursor-pointer select-none group hover:bg-gray-50 rounded-lg p-2 transition-colors" onClick={() => toggleGroup(type.id)}>
+                        <div className={`p-2 rounded-lg ${type.color ? type.color.split(' ')[0] : 'bg-gray-100'}`}>{type.icon && React.createElement(type.icon, { size: 18, className: type.color ? type.color.split(' ')[1] : 'text-gray-600' })}</div>
+                        <span className="text-sm font-bold text-gray-800">{type.label}</span>
+                        <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-semibold rounded-full">{typeItems.length}</span>
+                        <div className="h-px bg-gray-100 flex-1 ml-2"></div>
+                        <div className="text-gray-400">{isCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}</div>
+                    </div>
+
+                    {!isCollapsed && (
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                        {typeItems.map(item => (
+                             <div key={item.id} onClick={() => setViewItem(item)} className="group bg-white rounded-2xl border-2 border-orange-100 shadow-sm hover:shadow-lg transition-all duration-300 cursor-pointer flex flex-col overflow-hidden ring-2 ring-orange-200">
+                                <div className="relative aspect-square bg-white overflow-hidden p-2">
+                                    <img src={item.image} className="w-full h-full object-contain transition-transform duration-700 group-hover:scale-110" onError={(e) => {e.target.src = 'https://placehold.co/400x300/e2e8f0/1e293b?text=No+Image'}} />
+                                    <div className="absolute top-2 right-2 bg-orange-500 text-white text-[10px] font-bold px-2 py-1 rounded-full shadow-sm flex items-center gap-1"><AlertTriangle size={10} /> เติมด่วน</div>
+                                </div>
+                                <div className="p-4 flex-1 flex flex-col gap-2">
+                                    <div className="flex flex-wrap gap-1.5"><span className="text-[10px] font-medium px-2 py-0.5 bg-blue-50 text-blue-600 rounded-md border border-blue-100 truncate max-w-[100px]">{item.category}</span></div>
+                                    <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-2 text-wrap break-words h-10 group-hover:text-orange-600 transition-colors">{item.name}</h4>
+                                    <p className="text-xs text-gray-500 font-mono">{item.barcode}</p>
+                                    <div className="flex justify-between items-end mt-auto pt-3 border-t border-dashed border-orange-100">
+                                    <span className="text-[10px] bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">Min: {item.minStock}</span>
+                                    <span className="text-lg font-bold text-red-500">{item.quantity} <span className="text-xs font-normal text-gray-400">ชิ้น</span></span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                        </div>
+                    )}
+                </div>
+             )
+           })}
+           
+           {lowStockItems.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400 animate-fade-in">
+                <CheckCircle2 size={48} className="mb-3 opacity-20 text-green-500" />
+                <p className="text-sm text-green-600 font-medium">เยี่ยมมาก! ไม่มีสินค้าใกล้หมด</p>
+                </div>
+            )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderHistory = () => {
+    const filteredTransactions = transactions.filter(tx => 
+      (tx.date && tx.date.includes(searchTerm)) ||
+      (tx.itemName && tx.itemName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (tx.requester && tx.requester.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (tx.note && tx.note.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
+
+    // Group by Date
+    const grouped = filteredTransactions.reduce((acc, tx) => {
+        const datePart = tx.date.split(' ')[0];
+        if (!acc[datePart]) acc[datePart] = [];
+        acc[datePart].push(tx);
+        return acc;
+    }, {});
+    const dates = Object.keys(grouped);
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-white p-3 rounded-b-xl shadow-sm sticky top-0 z-20 border-b border-gray-100">
+           <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input type="text" placeholder="ค้นหาประวัติ..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"/></div>
+        </div>
+        <div className="space-y-6 pb-20 p-4">
+           {dates.length === 0 && (<div className="text-center py-10 text-gray-400"><History size={48} className="mx-auto mb-3 opacity-20" /><p>ไม่พบประวัติรายการ</p></div>)}
+           {dates.map(date => (
+               <div key={date} className="animate-fade-in">
+                   <div className="flex items-center gap-2 mb-2 px-1"><div className="h-2 w-2 rounded-full bg-blue-400"></div><span className="text-xs font-bold text-gray-500">{date}</span><div className="h-px bg-gray-100 flex-1"></div></div>
+                   <div className="space-y-2">
+                       {grouped[date].map(tx => (
+                           <div key={tx.id} className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between mb-2">
+                               <div className="flex items-center gap-3 overflow-hidden">
+                                   <div className={`p-2 rounded-lg shrink-0 ${tx.type === 'IN' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>{tx.type === 'IN' ? <ArrowDownCircle size={20} /> : <ArrowUpCircle size={20} />}</div>
+                                   <div className="min-w-0"><h4 className="font-bold text-gray-800 text-sm truncate">{tx.itemName}</h4><div className="flex items-center gap-2 text-xs text-gray-500"><span className="font-mono bg-gray-100 px-1 rounded flex items-center gap-1"><Clock size={10}/> {tx.date.split(' ')[1]}</span><span className="truncate text-blue-600 font-medium">{tx.requester || '-'}</span></div>{tx.note && <p className="text-[10px] text-gray-400 mt-0.5 truncate italic">"{tx.note}"</p>}</div>
+                               </div>
+                               <div className="text-right shrink-0 pl-2"><div className={`text-lg font-bold ${tx.type === 'IN' ? 'text-green-600' : 'text-red-600'}`}>{tx.type === 'IN' ? '+' : '-'}{tx.quantity}</div><div className="text-[10px] text-gray-400">ชิ้น</div></div>
+                           </div>
+                       ))}
+                   </div>
+               </div>
+           ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMobileMenu = () => (
+    <div className={`fixed inset-0 z-50 flex ${isMobileMenuOpen ? '' : 'pointer-events-none'}`}>
+      <div className={`fixed inset-0 bg-black/50 transition-opacity duration-300 ${isMobileMenuOpen ? 'opacity-100' : 'opacity-0'}`} onClick={() => setIsMobileMenuOpen(false)} />
+      <div className={`relative w-64 bg-white h-full shadow-xl flex flex-col transition-transform duration-300 transform ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-6 bg-blue-600 text-white"><h2 className="text-xl font-bold">Coway Stock</h2><p className="text-xs text-blue-200 mt-1">DSC Chiangrai</p></div>
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">{MENU_ITEMS.map(item => (<button key={item.id} onClick={() => { setActiveTab(item.id); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeTab === item.id ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}><item.icon size={20} /><span className="font-medium">{item.label}</span></button>))}</nav>
+        <div className="p-4 border-t border-gray-100"><div className="text-xs text-gray-400 text-center">v34.0 Mobile Layout Fix</div></div>
+      </div>
+    </div>
+  );
+
+  const renderStockCheck = () => {
+      if (!isCheckStarted) {
+          return (
+              <div className="flex flex-col items-center justify-center h-full p-8 text-center space-y-4">
+                  <div className="bg-blue-100 p-6 rounded-full text-blue-600 mb-4"><ClipboardCheck size={64} /></div>
+                  <h2 className="text-2xl font-bold text-gray-800">เริ่มนับสต็อกสินค้า</h2>
+                  <p className="text-gray-500 max-w-xs">ระบบจะโหลดรายการสินค้าทั้งหมด เพื่อให้คุณทำการตรวจนับและเปรียบเทียบยอดคงเหลือจริง</p>
+                  <button onClick={initStockCheck} className="bg-blue-600 text-white px-8 py-3 rounded-full font-bold shadow-lg hover:bg-blue-700 transition-transform active:scale-95 flex items-center gap-2"><RefreshCcw size={20} /> เริ่มการนับใหม่</button>
+              </div>
+          );
+      }
+  
+      const totalItems = checkList.length;
+      const countedItems = checkList.filter(i => i.actualQty > 0).length;
+      const matchedItems = checkList.filter(i => i.actualQty === i.expectedQty).length;
+      
+      const pendingList = checkList.filter(i => i.actualQty !== i.expectedQty);
+      const completedList = checkList.filter(i => i.actualQty === i.expectedQty);
+  
+      const activeTypes = TYPES.filter(t => 
+          t.id !== 'All' && 
+          t.id !== 'Consignment Tool'
+      ).sort((a, b) => {
+          const order = ['Stock', 'Filter', 'Spare Part'];
+          return order.indexOf(a.id) - order.indexOf(b.id);
+      });
+  
+      return (
+          <div className="space-y-4 h-full flex flex-col">
+              <div className="bg-white p-4 rounded-b-xl shadow-sm sticky top-0 z-30 border-b border-gray-100 space-y-3">
+                  <div className="flex justify-between items-center">
+                      <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2"><ClipboardCheck className="text-blue-600"/> นับสต็อก</h2>
+                      <div className="flex gap-2">
+                          <button onClick={downloadCheckPDF} className="text-xs bg-red-50 text-red-700 border border-red-200 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1"><FileType size={14}/> PDF</button>
+                          <button onClick={downloadCheckCSV} className="text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1"><FileText size={14}/> Excel</button>
+                          <button onClick={() => setIsCheckStarted(false)} className="text-xs bg-gray-100 text-gray-600 border border-gray-200 px-3 py-1.5 rounded-lg">ออก</button>
+                      </div>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style={{ width: `${(countedItems/totalItems)*100}%` }}></div></div>
+                  <div className="flex justify-between text-xs text-gray-500"><span>นับแล้ว {countedItems}/{totalItems}</span><span className="text-green-600 font-bold">ตรงกัน {matchedItems}</span></div>
+                  <div className="flex gap-2"><input autoFocus type="text" value={scanCode} onChange={(e) => setScanCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleStockCheckScan(scanCode)} placeholder="สแกนบาร์โค้ด / ซีเรียล..." className="flex-1 p-2 border border-blue-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" /><button onClick={() => handleStockCheckScan(scanCode)} className="bg-blue-600 text-white px-4 rounded-lg"><Plus size={20}/></button><button onClick={() => setIsCameraOpen(true)} className="bg-gray-100 text-gray-600 px-3 rounded-lg border"><Camera size={20}/></button></div>
+              </div>
+  
+              <div className="flex-1 overflow-y-auto p-4 space-y-6 pb-20">
+                  {/* Loop Types for Pending Items */}
+                  {activeTypes.map(type => {
+                      // Filter & Sort
+                      const groupItems = pendingList
+                          .filter(item => item.type === type.id)
+                          .sort((a, b) => String(a.barcode).localeCompare(String(b.barcode), undefined, {numeric: true}));
+  
+                      if (groupItems.length === 0) return null;
+  
+                      const isCollapsed = collapsedCheckGroups.includes(type.id);
+  
+                      return (
+                          <div key={type.id} className="animate-fade-in">
+                              {/* Group Header */}
+                              <div 
+                                  className="flex items-center gap-2 mb-3 px-1 cursor-pointer select-none group hover:bg-gray-50 rounded-lg p-2 transition-colors"
+                                  onClick={() => toggleCheckGroup(type.id)}
+                              >
+                                  <div className={`p-2 rounded-lg ${type.color ? type.color.split(' ')[0] : 'bg-gray-100'}`}>
+                                      {type.icon && React.createElement(type.icon, { size: 18, className: type.color ? type.color.split(' ')[1] : 'text-gray-600' })}
+                                  </div>
+                                  <span className="text-sm font-bold text-gray-800">{type.label}</span>
+                                  <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-semibold rounded-full">{groupItems.length}</span>
+                                  <div className="h-px bg-gray-100 flex-1 ml-2"></div>
+                                  <div className="text-gray-400">{isCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}</div>
+                              </div>
+  
+                              {/* Items List */}
+                              {!isCollapsed && (
+                                  <div className="space-y-2">
+                                      {groupItems.map(item => {
+                                          const diff = item.actualQty - item.expectedQty;
+                                          const isMatch = diff === 0;
+                                          const isOver = diff > 0;
+                                          const bgClass = isMatch ? 'bg-green-50 border-green-200' : (isOver ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200');
+                                          
+                                          return (
+                                              <div key={item.id} className={`p-3 rounded-xl border ${bgClass} flex justify-between items-center shadow-sm gap-3`}>
+                                                  <div className="flex-1 min-w-0">
+                                                      {/* Updated: Line clamp and break words for mobile */}
+                                                      <h4 className="font-bold text-sm text-gray-800 leading-tight line-clamp-2 break-words w-full" title={item.name}>{item.name}</h4>
+                                                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                                                          <span className="font-mono bg-white border px-1 rounded">{item.barcode}</span>
+                                                      </div>
+                                                      {item.type === 'Stock' && item.countedSerials.length > 0 && (
+                                                          <div className="mt-2 flex flex-wrap gap-1">
+                                                              {item.countedSerials.map(s => <span key={s} className="text-[10px] bg-white border px-1 rounded text-blue-600 font-mono">{s}</span>)}
+                                                          </div>
+                                                      )}
+                                                  </div>
+                                                  
+                                                  <div className="text-right pl-1 flex flex-col items-end gap-2 shrink-0">
+                                                      <div className="text-[10px] text-gray-400 whitespace-nowrap">ระบบ: {item.expectedQty}</div>
+                                                      <div className="flex items-center gap-1">
+                                                          <button onClick={() => {
+                                                              const newList = [...checkList];
+                                                              const idx = newList.findIndex(i => i.id === item.id);
+                                                              if(idx !== -1 && newList[idx].actualQty > 0) newList[idx].actualQty--;
+                                                              setCheckList(newList);
+                                                          }} className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center active:scale-90 transition shrink-0 border border-gray-200 shadow-sm"><Minus size={16}/></button>
+                                                          <span className={`text-xl font-bold w-8 text-center ${isMatch ? 'text-green-600' : 'text-red-500'}`}>{item.actualQty}</span>
+                                                          <button onClick={() => {
+                                                              const newList = [...checkList];
+                                                              const idx = newList.findIndex(i => i.id === item.id);
+                                                              if(idx !== -1) newList[idx].actualQty++;
+                                                              setCheckList(newList);
+                                                          }} className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center active:scale-90 transition shrink-0 border border-blue-200 shadow-sm"><Plus size={16}/></button>
+                                                      </div>
+                                                      {diff !== 0 && <span className={`text-[10px] font-bold ${diff > 0 ? 'text-blue-500' : 'text-red-500'}`}>{diff > 0 ? '+' : ''}{diff}</span>}
+                                                  </div>
+                                              </div>
+                                          );
+                                      })}
+                                  </div>
+                              )}
+                          </div>
+                      );
+                  })}
+  
+                  {/* COMPLETED SECTION (At the bottom) */}
+                  {completedList.length > 0 && (
+                      <div className="animate-fade-in mt-8 pt-4 border-t border-green-100">
+                           <div 
+                              className="flex items-center gap-2 mb-3 px-1 cursor-pointer select-none group hover:bg-green-50 rounded-lg p-2 transition-colors bg-green-50"
+                              onClick={() => toggleCheckGroup('completed')}
+                          >
+                              <div className="p-2 rounded-lg bg-green-100 text-green-600"><CheckCircle2 size={18} /></div>
+                              <span className="text-sm font-bold text-green-800">นับครบแล้ว</span>
+                              <span className="px-2 py-0.5 bg-green-200 text-green-700 text-[10px] font-semibold rounded-full">{completedList.length}</span>
+                              <div className="h-px bg-green-200 flex-1 ml-2"></div>
+                              <div className="text-green-600">{collapsedCheckGroups.includes('completed') ? <ChevronRight size={18} /> : <ChevronDown size={18} />}</div>
+                          </div>
+  
+                          {!collapsedCheckGroups.includes('completed') && (
+                              <div className="space-y-2 opacity-70 hover:opacity-100 transition-opacity">
+                                  {completedList.map((item) => (
+                                      <div key={item.id} className="p-3 rounded-xl border bg-white border-green-200 flex justify-between items-center shadow-sm gap-3">
+                                           <div className="flex-1 min-w-0 overflow-hidden">
+                                              <h4 className="font-bold text-sm text-gray-800 leading-tight line-clamp-2 break-words w-full" title={item.name}>{item.name}</h4>
+                                              <p className="text-xs text-gray-500 font-mono mt-0.5">{item.barcode}</p>
+                                           </div>
+                                           <div className="text-right pl-2 shrink-0">
+                                              <div className="text-green-600 font-bold flex items-center gap-1"><CheckCircle2 size={14}/> {item.actualQty}</div>
+                                              <button onClick={() => {
+                                                  const newList = [...checkList];
+                                                  const idx = newList.findIndex(i => i.id === item.id);
+                                                  if(idx !== -1 && newList[idx].actualQty > 0) newList[idx].actualQty--;
+                                                  setCheckList(newList);
+                                              }} className="text-[10px] text-gray-400 underline mt-1">แก้ไข</button>
+                                           </div>
+                                      </div>
+                                  ))}
+                              </div>
+                          )}
+                      </div>
+                  )}
+                  
+                  {pendingList.length === 0 && completedList.length > 0 && (
+                      <div className="text-center py-10"><div className="inline-flex p-4 rounded-full bg-green-100 text-green-600 mb-3"><CheckCircle2 size={48} /></div><h3 className="text-xl font-bold text-gray-800">สุดยอด! นับสต็อกครบแล้ว</h3><p className="text-gray-500">คุณสามารถดาวน์โหลดรายงานได้เลย</p></div>
+                  )}
+              </div>
+          </div>
+      );
+    };
+
+  // ... (renderDetailModal and renderAddModal remain the same) ...
+  // Included for completeness
+  const renderDetailModal = () => {
+    if (!viewItem) return null;
+    return (
+      <div className="fixed inset-0 bg-black/60 flex items-end md:items-center justify-center z-50 p-0 md:p-4" onClick={() => setViewItem(null)}>
+        <div className="bg-white w-full md:max-w-sm rounded-t-2xl md:rounded-2xl overflow-hidden animate-slide-up md:animate-fade-in" onClick={e => e.stopPropagation()}>
+          <div className="relative h-96 bg-white">
+               <img src={viewItem.image} className="w-full h-full object-contain p-8" onError={(e) => {e.target.src = 'https://placehold.co/400x300/e2e8f0/1e293b?text=No+Image'}} />
+               <button onClick={() => setViewItem(null)} className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition"><X size={20} /></button>
+               <div className="absolute bottom-0 w-full bg-gradient-to-t from-black/90 via-black/40 to-transparent p-6 pt-20">
+                  <h3 className="text-white text-2xl font-bold leading-tight drop-shadow-md">{viewItem.name}</h3>
+               </div>
+          </div>
+          <div className="p-6 space-y-5">
+             <div className="flex gap-2"><span className="bg-blue-50 text-blue-700 text-xs px-3 py-1.5 rounded-lg font-semibold border border-blue-100">{viewItem.category}</span><span className="bg-orange-50 text-orange-700 text-xs px-3 py-1.5 rounded-lg font-semibold border border-orange-100">{viewItem.type}</span></div>
+             <div className="flex justify-between bg-gray-50 p-4 rounded-xl border border-gray-100">
+                <div><p className="text-xs text-gray-500 mb-1 uppercase tracking-wide font-semibold">รหัสสินค้า</p><p className="font-mono font-bold text-gray-800 text-lg">{viewItem.barcode}</p></div>
+                <div className="text-right"><p className="text-xs text-gray-500 mb-1 uppercase tracking-wide font-semibold">คงเหลือ</p><p className="text-3xl font-bold text-blue-600 leading-none">{viewItem.quantity} <span className="text-sm text-gray-400 font-normal">ชิ้น</span></p></div>
+             </div>
+             {viewItem.type === 'Stock' && (
+               <div className="relative group">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2"><List size={14}/> Serial Numbers ({viewItem.serials ? viewItem.serials.length : 0})</label>
+                  <select className="w-full p-4 bg-white border border-gray-300 rounded-xl text-sm appearance-none focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer hover:border-blue-300 transition" defaultValue=""><option value="" disabled>-- คลิกเพื่อดูรายการ Serial --</option>{viewItem.serials && viewItem.serials.length > 0 ? viewItem.serials.map((s, idx) => <option key={idx} value={s}>{s}</option>) : <option disabled>ไม่มีข้อมูล</option>}</select>
+                  <div className="absolute right-4 top-9 pointer-events-none text-gray-400 group-hover:text-blue-500 transition">▼</div>
+               </div>
+             )}
+             <div className="grid grid-cols-2 gap-4 pt-2"><button onClick={(e) => { e.stopPropagation(); setViewItem(null); openEditModal(viewItem); }} className="py-3 bg-gray-100 rounded-xl text-sm font-bold text-gray-700 flex items-center justify-center gap-2 hover:bg-gray-200 transition"><Pencil size={18}/> แก้ไข</button><button onClick={(e) => { e.stopPropagation(); setViewItem(null); handleDeleteItem(viewItem.id); }} className="py-3 bg-red-50 rounded-xl text-sm font-bold text-red-600 flex items-center justify-center gap-2 hover:bg-red-100 transition"><Trash2 size={18}/> ลบ</button></div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderAddModal = () => (
+    <div className="fixed inset-0 bg-black/60 flex items-end md:items-center justify-center z-50 p-0 md:p-4">
+      <div className="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-3 border-b border-gray-100 flex justify-between items-center bg-gray-50"><h3 className="font-bold text-gray-800">{editingId ? 'แก้ไข' : 'เพิ่มสินค้า'}</h3><button onClick={() => setShowAddModal(false)}><X size={20} className="text-gray-400" /></button></div>
+        <form onSubmit={handleSubmitNewItem} className="p-4 space-y-3 overflow-y-auto">
+          <div><label className="text-xs font-medium text-gray-700">ชื่อสินค้า *</label><input required type="text" value={newItemForm.name} onChange={e => setNewItemForm({...newItemForm, name: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg text-sm" /></div>
+          <div className="flex gap-2"><div className="flex-1"><label className="text-xs font-medium text-gray-700">บาร์โค้ด *</label><input required type="text" value={newItemForm.barcode} onChange={e => setNewItemForm({...newItemForm, barcode: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg text-sm" /></div></div>
+          <div className="flex gap-2"><div className="flex-1"><label className="text-xs font-medium text-gray-700">หมวดหมู่</label><select value={newItemForm.category} onChange={e => setNewItemForm({...newItemForm, category: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg text-sm">{CATEGORIES.filter(c => c.id !== 'All').map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div><div className="flex-1"><label className="text-xs font-medium text-gray-700">ประเภท</label><select value={newItemForm.type} onChange={e => setNewItemForm({...newItemForm, type: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg text-sm">{TYPES.filter(t => t.id !== 'All').map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
+          <div><label className="text-xs font-medium text-gray-700">รูปภาพ</label><div className="flex gap-2 mt-1"><input type="text" value={newItemForm.image} onChange={e => setNewItemForm({...newItemForm, image: e.target.value})} className="flex-1 p-2 border border-gray-300 rounded-lg text-xs" placeholder="URL หรือ อัปโหลด" /><label className="bg-gray-100 px-3 py-2 rounded-lg cursor-pointer border border-gray-200"><ImageIcon size={16} /> <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} /></label></div></div>
+          <div className="grid grid-cols-3 gap-2"><div><label className="text-[10px] text-gray-500">ราคา</label><input type="number" value={newItemForm.price} onChange={e => setNewItemForm({...newItemForm, price: e.target.value})} className="w-full p-2 border rounded-lg text-sm text-center" /></div><div><label className="text-[10px] text-gray-500">จำนวน</label><input type="number" value={newItemForm.quantity} onChange={e => setNewItemForm({...newItemForm, quantity: e.target.value})} className="w-full p-2 border rounded-lg text-sm text-center" /></div><div><label className="text-[10px] text-gray-500">Min</label><input type="number" value={newItemForm.minStock} onChange={e => setNewItemForm({...newItemForm, minStock: e.target.value})} className="w-full p-2 border rounded-lg text-sm text-center" /></div></div>
+          <div className="pt-2 flex gap-2"><button type="button" onClick={() => setShowAddModal(false)} className="flex-1 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm">ยกเลิก</button><button type="submit" className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold shadow-sm">บันทึก</button></div>
+        </form>
+      </div>
+    </div>
+  );
+
+  const renderImportModal = () => (
+    <div className="fixed inset-0 bg-black/60 flex items-end md:items-center justify-center z-50 p-0 md:p-4">
+      <div className="bg-white w-full md:max-w-lg rounded-t-2xl md:rounded-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-3 border-b border-gray-100 flex justify-between items-center bg-gray-50"><h3 className="font-bold text-gray-800 flex items-center gap-2 text-sm"><FileUp size={16} className="text-green-600" /> นำเข้า CSV</h3><button onClick={() => setShowImportModal(false)}><X size={20} className="text-gray-400" /></button></div>
+        <div className="p-4 space-y-4 overflow-y-auto"><div className="flex gap-2"><button onClick={handleDownloadTemplate} className="flex-1 flex items-center justify-center gap-1 bg-blue-50 text-blue-600 border border-blue-100 px-3 py-2 rounded-lg text-xs font-medium"><Download size={14} /> โหลด Template</button><input type="file" accept=".csv" ref={fileInputRef} className="hidden" onChange={handleFileChange} /><button onClick={() => fileInputRef.current?.click()} className="flex-1 flex items-center justify-center gap-1 bg-green-600 text-white px-3 py-2 rounded-lg text-xs font-medium shadow-sm"><FileSpreadsheet size={14} /> เลือกไฟล์</button></div>{importPreview.length > 0 ? (<div className="border border-gray-200 rounded-lg overflow-hidden max-h-60 overflow-y-auto"><table className="w-full text-left text-xs"><thead className="bg-gray-50 text-gray-600 sticky top-0"><tr><th className="p-2">ชื่อ</th><th className="p-2">Type</th><th className="p-2 text-right">จำนวน</th></tr></thead><tbody className="divide-y divide-gray-100">{importPreview.map((item, idx) => (<tr key={idx}><td className="p-2 truncate max-w-[120px]">{item.name}</td><td className="p-2 text-[10px] text-gray-500">{item.type}</td><td className="p-2 text-right">{item.quantity}</td></tr>))}</tbody></table></div>) : (<div className="text-center py-6 border-2 border-dashed border-gray-200 rounded-lg text-gray-400 text-xs"><p>เลือกไฟล์ .csv เพื่อนำเข้า</p></div>)}</div><div className="p-3 border-t border-gray-100 flex gap-2 bg-gray-50"><button onClick={() => setShowImportModal(false)} className="flex-1 py-2 bg-white border text-gray-700 rounded-lg text-xs">ยกเลิก</button><button onClick={confirmImport} disabled={importPreview.length === 0} className={`flex-1 py-2 rounded-lg text-white text-xs font-bold ${importPreview.length > 0 ? 'bg-green-600' : 'bg-gray-300'}`}>ยืนยัน ({importPreview.length})</button></div></div></div>);
+
+  if (!isStyleLoaded) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', fontFamily: 'sans-serif', backgroundColor: '#f3f4f6', color: '#4b5563' }}>
+        <div style={{ fontSize: '1.125rem', fontWeight: '600' }}>Coway Stock Chiangrai</div>
+        <div style={{ fontSize: '0.875rem', marginTop: '0.5rem', opacity: 0.8 }}>Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen bg-gray-50 font-sans text-gray-900 text-sm overflow-hidden relative">
+      {/* Mobile Menu Overlay */}
+      {renderMobileMenu()}
+
+      {/* Desktop Sidebar */}
+      <aside className="w-64 bg-white border-r border-gray-200 flex-col hidden md:flex">
+        <div className="p-6 flex items-center gap-3"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">C</div><span className="text-lg font-bold text-blue-900">Coway Stock</span></div>
+        <nav className="flex-1 px-4 space-y-2">{MENU_ITEMS.map(item => (<button key={item.id} onClick={() => setActiveTab(item.id)} className={`flex items-center gap-3 w-full p-3 rounded-lg transition ${activeTab === item.id ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}><item.icon size={20} /><span>{item.label}</span></button>))}</nav>
+        <div className="p-4 border-t text-xs text-gray-400 flex justify-between items-center"><span>v34.0 Mobile Fix</span><div className="flex items-center gap-1">{isSaving ? <RefreshCw className="animate-spin" size={12}/> : connectionStatus==='connected' ? <Wifi size={12} className="text-green-500"/> : <WifiOff size={12} className="text-red-500"/>}</div></div>
+      </aside>
+      <main className="flex-1 flex flex-col h-full relative">
+        <header className="bg-white border-b border-gray-200 px-4 py-3 flex justify-between items-center sticky top-0 z-20 shadow-sm md:shadow-none">
+          <div className="flex items-center gap-3"><button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg"><Menu size={24} /></button><h1 className="text-lg font-bold text-gray-800 flex items-center gap-2">{MENU_ITEMS.find(i => i.id === activeTab)?.icon && React.createElement(MENU_ITEMS.find(i => i.id === activeTab).icon, { size: 18, className: "text-blue-600" })} {MENU_ITEMS.find(i => i.id === activeTab)?.label}</h1></div>
+          <div className="flex items-center gap-2">
+            <button onClick={fetchAllData} className={`p-2 rounded-full text-gray-600 hover:bg-gray-100 transition ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} title="รีโหลดข้อมูล"><RefreshCcw size={20} /></button>
+            <div className="flex items-center gap-1 md:hidden mr-2">{isSaving ? <RefreshCw className="animate-spin text-blue-500" size={14}/> : connectionStatus==='connected' ? <div className="w-2 h-2 bg-green-500 rounded-full"/> : <div className="w-2 h-2 bg-red-500 rounded-full"/>}</div><span className="text-xs text-gray-500 hidden sm:block">Admin</span><div className="w-8 h-8 rounded-full bg-gray-200"></div>
+          </div>
+        </header>
+        <div className="flex-1 overflow-y-auto scroll-smooth" ref={scrollContainerRef} onScroll={handleScroll}>
+          <div className="max-w-7xl mx-auto pb-20 md:pb-0">
+            {activeTab === 'dashboard' && renderDashboard()}
+            {activeTab === 'operation' && renderOperation()}
+            {activeTab === 'inventory' && renderInventory()}
+            {activeTab === 'lowstock' && renderLowStock()}
+            {activeTab === 'stockcheck' && renderStockCheck()}
+            {activeTab === 'history' && renderHistory()}
+          </div>
+        </div>
+        <button onClick={scrollToTop} className={`fixed bottom-20 right-4 md:bottom-8 md:right-8 bg-blue-600 text-white p-3 rounded-full shadow-lg z-40 transition-all duration-300 transform hover:bg-blue-700 hover:scale-110 ${showScrollTop ? 'translate-y-0 opacity-100' : 'translate-y-10 opacity-0 pointer-events-none'}`}><ChevronUp size={24} /></button>
+        <div className="md:hidden bg-white border-t border-gray-200 flex justify-around p-2 pb-safe shrink-0 z-40">{MENU_ITEMS.map(item => (<button key={item.id} onClick={() => setActiveTab(item.id)} className={`flex flex-col items-center p-2 rounded-lg w-full ${activeTab === item.id ? 'text-blue-600' : 'text-gray-400'}`}><item.icon size={20} /><span className="text-[10px] mt-1">{item.label}</span></button>))}</div>
+      </main>
+      {showAddModal && renderAddModal()}
+      {viewItem && renderDetailModal()}
+      {showImportModal && renderImportModal()}
+    </div>
+  );
+}
